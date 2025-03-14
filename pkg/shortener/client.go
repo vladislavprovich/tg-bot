@@ -4,10 +4,18 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"github.com/sirupsen/logrus"
 	"io"
 	"net/http"
+	"net/url"
+
+	"github.com/sirupsen/logrus"
+)
+
+const (
+	shorten = "shorten"
+	stats   = "stats"
 )
 
 type BasicClient struct {
@@ -17,8 +25,8 @@ type BasicClient struct {
 }
 
 type Client interface {
-	CreateShortUrl(ctx context.Context, req *CreateShortURLRequest) (*CreateShortURLResponse, error)
-	GetStatsUrl(ctx context.Context, req *GetShortURLStatsRequest) (*GetShortURLStatsResponse, error)
+	CreateShortURL(ctx context.Context, req *CreateShortURLRequest) (*CreateShortURLResponse, error)
+	GetStatsURL(ctx context.Context, req *GetShortURLStatsRequest) (*GetShortURLStatsResponse, error)
 }
 
 func NewBasicClient(config *Config, httpClient *http.Client, logger *logrus.Logger) BasicClient {
@@ -29,22 +37,35 @@ func NewBasicClient(config *Config, httpClient *http.Client, logger *logrus.Logg
 	}
 }
 
-func (c *BasicClient) CreateShortUrl(ctx context.Context, req *CreateShortURLRequest) (*CreateShortURLResponse, error) {
+func (c *BasicClient) CreateShortURL(ctx context.Context, req *CreateShortURLRequest) (*CreateShortURLResponse, error) {
 	jsonReq, err := json.Marshal(req)
 	if err != nil {
-		return nil, fmt.Errorf("error marshalling request: %w", err)
+		c.logger.Errorf("error marshalling request: %s", err)
+		return nil, errors.New("service error")
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.config.BaseURL, bytes.NewBuffer(jsonReq))
+	urlForCreateShortURL := &url.URL{
+		Scheme: "http",
+		Host:   fmt.Sprintf("%s:%s", c.config.BaseURL, c.config.Port),
+		Path:   shorten,
+	}
+
+	httpReq, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodPost,
+		urlForCreateShortURL.String(),
+		bytes.NewBuffer(jsonReq))
 	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
+		c.logger.Errorf("failed to create request: %v", err)
+		return nil, errors.New("service error")
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
 
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
-		return nil, fmt.Errorf("http request failed: %w", err)
+		c.logger.Errorf("http request failed: %v", err)
+		return nil, errors.New("service error")
 	}
 	defer func() {
 		if err = resp.Body.Close(); err != nil {
@@ -53,38 +74,45 @@ func (c *BasicClient) CreateShortUrl(ctx context.Context, req *CreateShortURLReq
 	}()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("bad status code: %d", resp.StatusCode)
+		c.logger.Errorf("bad status code: %d", resp.StatusCode)
+		return nil, errors.New("service error")
 	}
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("error reading body: %v", err)
+		c.logger.Errorf("error reading body: %v", err)
+		return nil, errors.New("service error")
 	}
 
 	var res CreateShortURLResponse
 	if err = json.Unmarshal(body, &res); err != nil {
-		return nil, fmt.Errorf("bad response body: %s", string(body))
+		c.logger.Errorf("bad response body: %s", string(body))
+		return nil, errors.New("service error")
 	}
 
 	return &res, nil
 }
 
-func (c *BasicClient) GetStatsUrl(ctx context.Context, req *GetShortURLStatsRequest) (*GetShortURLStatsResponse, error) {
-	jsonReq, err := json.Marshal(req)
-	if err != nil {
-		return nil, fmt.Errorf("error marshalling request: %w", err)
+func (c *BasicClient) GetStatsURL(ctx context.Context,
+	req *GetShortURLStatsRequest) (*GetShortURLStatsResponse, error) {
+	urlForGetStatus := &url.URL{
+		Scheme: "http",
+		Host:   fmt.Sprintf("%s:%s", c.config.BaseURL, c.config.Port),
+		Path:   fmt.Sprintf("%s/%s", req.ShortURL, stats),
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, c.config.BaseGetURL, bytes.NewBuffer(jsonReq))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, urlForGetStatus.String(), nil)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
+		c.logger.Errorf("failed to create request: %v", err)
+		return nil, errors.New("service error")
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
 
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
-		return nil, fmt.Errorf("http request failed: %w", err)
+		c.logger.Errorf("http request failed: %v", err)
+		return nil, errors.New("service error")
 	}
 	defer func() {
 		if err = resp.Body.Close(); err != nil {
@@ -93,17 +121,20 @@ func (c *BasicClient) GetStatsUrl(ctx context.Context, req *GetShortURLStatsRequ
 	}()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("bad status code: %d", resp.StatusCode)
+		c.logger.Errorf("bad status code: %d", resp.StatusCode)
+		return nil, errors.New("service error")
 	}
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("error reading body: %v", err)
+		c.logger.Errorf("error reading body: %v", err)
+		return nil, errors.New("service error")
 	}
 
 	var res GetShortURLStatsResponse
 	if err = json.Unmarshal(body, &res); err != nil {
-		return nil, fmt.Errorf("bad response body: %s", string(body))
+		c.logger.Errorf("bad response body: %s", string(body))
+		return nil, errors.New("service error")
 	}
 
 	return &res, nil

@@ -5,7 +5,6 @@ import (
 )
 
 func BotInit(cfg BotConfig) *tgbotapi.BotAPI {
-
 	bot, err := tgbotapi.NewBotAPI(cfg.BotToken)
 	if err != nil {
 		panic(err)
